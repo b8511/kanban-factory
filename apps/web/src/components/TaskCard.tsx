@@ -61,7 +61,6 @@ export function TaskCard({ task }: Props) {
   const lastExit = appRunExits[task.projectId];
   const stderrCount = runLogs.filter((l) => l.stream === 'stderr').length;
   const crashed = lastExit && lastExit.code !== null && lastExit.code !== 0;
-  const [logsOpen, setLogsOpen] = useState(false);
   const [cmdEditor, setCmdEditor] = useState<string | null>(null);
 
   const startMut = useMutation({
@@ -119,6 +118,36 @@ export function TaskCard({ task }: Props) {
       runMut.reset();
     },
   });
+  const makeWebAppMut = useMutation({
+    mutationFn: async () => {
+      const description = [
+        'This project runs, but it is a script — it finishes and exits with no endpoint to hit.',
+        'Turn it into a web app so the user can interact with it in a browser.',
+        '',
+        'Acceptance:',
+        '- The run command boots a long-running HTTP server (Flask/FastAPI/Express/etc. — match the existing stack).',
+        '- The server binds to localhost on a free port and prints the URL to stdout on boot (e.g. `Running on http://localhost:8000`).',
+        '- At least one meaningful route exists that exposes what the existing script did. If the script had output (self-test, predictions, a value, etc.), expose it as JSON at `/` or as a simple HTML page.',
+        '- Update the project run command to whatever now boots the server.',
+        '- Verify by running the new command yourself and confirming it stays running and serves a request (hit it with curl).',
+        '',
+        `Current run command: ${appRun?.command ?? '(unknown)'}`,
+        `Built from earlier task: "${task.title}".`,
+      ].join('\n');
+      const newTask = await api.createTask(
+        task.projectId,
+        'Make this a web app (expose an endpoint)',
+        description
+      );
+      await api.startTask(newTask.id);
+      return newTask;
+    },
+    onSuccess: (newTask) => {
+      qc.invalidateQueries({ queryKey: ['tasks', task.projectId] });
+      setSelectedProject(task.projectId);
+      setSelectedTask(newTask.id);
+    },
+  });
   const sendToFactoryMut = useMutation({
     mutationFn: () => {
       const stderrLines = runLogs.filter((l) => l.stream === 'stderr').slice(-30);
@@ -149,6 +178,13 @@ export function TaskCard({ task }: Props) {
   });
   const isDone = task.status === 'done';
   const canSendToFactory = isDone && (crashed || stderrCount > 0);
+  const looksLikeOneShot =
+    isDone &&
+    lastExit !== null &&
+    lastExit !== undefined &&
+    !appRun?.running &&
+    !crashed &&
+    runUrls.length === 0;
 
   const { data: runStatus } = useQuery({
     queryKey: ['runStatus', task.projectId],
@@ -434,21 +470,67 @@ export function TaskCard({ task }: Props) {
         </div>
       )}
 
-      {isDone && lastExit && !appRun?.running && (
-        <div
-          className={clsx(
-            'mt-2 rounded-md px-2 py-1 text-[11px]',
-            crashed
-              ? 'border border-rose-700/60 bg-rose-950/40 text-rose-200'
-              : 'border border-neutral-800 bg-neutral-900/60 text-neutral-400'
-          )}
-        >
-          {crashed ? '✗ ' : '■ '}
-          Process exited{' '}
-          {lastExit.code !== null ? `with code ${lastExit.code}` : `(signal ${lastExit.signal ?? '?'})`}
-          {stderrCount > 0 && ` · ${stderrCount} stderr line${stderrCount === 1 ? '' : 's'}`}
-        </div>
-      )}
+      {isDone && lastExit && !appRun?.running && (() => {
+        const stdoutCount = runLogs.length - stderrCount;
+        const startedAt = appRun?.startedAt ? new Date(appRun.startedAt) : null;
+        const finishedAt = new Date(lastExit.finishedAt);
+        const duration = startedAt ? (finishedAt.getTime() - startedAt.getTime()) / 1000 : null;
+        const durationStr =
+          duration === null
+            ? null
+            : duration < 1
+              ? `${Math.round(duration * 1000)}ms`
+              : duration < 60
+                ? `${duration.toFixed(1)}s`
+                : `${Math.floor(duration / 60)}m ${Math.round(duration % 60)}s`;
+
+        const headline = crashed
+          ? `✗ Crashed · exit ${lastExit.code}`
+          : lastExit.signal
+            ? `■ Terminated (signal ${lastExit.signal})`
+            : lastExit.code === 0 && runLogs.length === 0
+              ? '■ Finished cleanly · no output'
+              : lastExit.code === 0 && duration !== null && duration < 2
+                ? '■ Finished cleanly · likely a one-shot script (not a long-running server)'
+                : '■ Finished cleanly';
+
+        return (
+          <div
+            className={clsx(
+              'mt-2 rounded-md px-2.5 py-2 text-[11px]',
+              crashed
+                ? 'border border-rose-700/60 bg-rose-950/40 text-rose-200'
+                : 'border border-neutral-800 bg-neutral-900/60 text-neutral-300'
+            )}
+          >
+            <div className={clsx('font-medium', crashed ? 'text-rose-200' : 'text-neutral-200')}>
+              {headline}
+            </div>
+            <div className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[10px] text-neutral-500">
+              <span className="text-neutral-600">Command</span>
+              <span className="break-all font-mono text-neutral-400">{appRun?.command ?? '(unknown)'}</span>
+              {startedAt && (
+                <>
+                  <span className="text-neutral-600">Started</span>
+                  <span className="font-mono text-neutral-400">{startedAt.toLocaleTimeString()}</span>
+                </>
+              )}
+              <span className="text-neutral-600">Ended</span>
+              <span className="font-mono text-neutral-400">
+                {finishedAt.toLocaleTimeString()}
+                {durationStr && <span className="text-neutral-600"> · {durationStr}</span>}
+              </span>
+              <span className="text-neutral-600">Output</span>
+              <span className="font-mono text-neutral-400">
+                {stdoutCount} stdout
+                {stderrCount > 0 && (
+                  <span className="text-rose-400"> · {stderrCount} stderr</span>
+                )}
+              </span>
+            </div>
+          </div>
+        );
+      })()}
 
       {canSendToFactory && (
         <div className="mt-2">
@@ -475,37 +557,61 @@ export function TaskCard({ task }: Props) {
         </div>
       )}
 
-      {isDone && (running || runLogs.length > 0) && (
+      {looksLikeOneShot && !canSendToFactory && (
         <div className="mt-2">
           <button
-            className="flex items-center gap-1 text-[11px] text-neutral-500 hover:text-neutral-300"
+            className="btn btn-violet w-full"
             onClick={(e) => {
               e.stopPropagation();
-              setLogsOpen((v) => !v);
+              makeWebAppMut.mutate();
             }}
+            disabled={makeWebAppMut.isPending}
+            title="Dispatch a task to wrap this in a long-running HTTP server so Run gives you a link"
           >
-            <span>{logsOpen ? '▾' : '▸'}</span>
-            <span>Logs ({runLogs.length})</span>
+            {makeWebAppMut.isPending
+              ? '🌐 Dispatching…'
+              : makeWebAppMut.isSuccess
+                ? '✓ New task started'
+                : '🌐 Make this a web app (expose an endpoint)'}
           </button>
-          {logsOpen && (
-            <div className="mt-1 max-h-40 overflow-y-auto rounded-md border border-neutral-800 bg-black/60 p-2 font-mono text-[10px] leading-snug">
-              {runLogs.length === 0 ? (
-                <div className="text-neutral-600">(no output yet)</div>
-              ) : (
-                runLogs.slice(-40).map((l, i) => (
-                  <div
-                    key={i}
+          {makeWebAppMut.isError && (
+            <div className="mt-1 break-all text-[11px] text-rose-400">
+              {(makeWebAppMut.error as Error).message}
+            </div>
+          )}
+        </div>
+      )}
+
+      {isDone && (running || runLogs.length > 0) && (
+        <div className="mt-2">
+          <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-neutral-500">
+            <span>Logs</span>
+            <span className="font-mono text-neutral-600">
+              {runLogs.length} line{runLogs.length === 1 ? '' : 's'}
+              {stderrCount > 0 && <span className="text-rose-400"> · {stderrCount} stderr</span>}
+            </span>
+          </div>
+          <div className="max-h-64 overflow-y-auto rounded-md border border-neutral-800 bg-black/70 p-2 font-mono text-[10px] leading-snug">
+            {runLogs.length === 0 ? (
+              <div className="text-neutral-600">(no output yet — waiting for first line…)</div>
+            ) : (
+              runLogs.map((l, i) => (
+                <div key={i} className="flex gap-2">
+                  <span className="w-6 shrink-0 select-none text-right text-neutral-700">
+                    {i + 1}
+                  </span>
+                  <span
                     className={clsx(
-                      'whitespace-pre-wrap break-all',
+                      'min-w-0 flex-1 whitespace-pre-wrap break-all',
                       l.stream === 'stderr' ? 'text-rose-300' : 'text-neutral-300'
                     )}
                   >
                     {l.line}
-                  </div>
-                ))
-              )}
-            </div>
-          )}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       )}
     </div>
