@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.local
+apps/server/data.db
+apps/server/data.db-journal
+apps/server/data.db-shm
+apps/server/data.db-wal
+apps/server/logs/*.jsonl
+!apps/server/logs/.gitkeep
+*.log
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
