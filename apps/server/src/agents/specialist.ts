@@ -16,13 +16,18 @@ export interface SpecialistOptions {
   abortSignal?: AbortSignal;
 }
 
+export interface SpecialistResult {
+  summary: string;
+  toolCount: number;
+}
+
 export async function runSpecialist(
   project: Project,
   task: Task,
   subtask: Subtask,
   index: number,
   opts: SpecialistOptions = {}
-): Promise<string> {
+): Promise<SpecialistResult> {
   const feedbackBlock =
     opts.feedback && opts.feedback.length > 0
       ? `\n\nPRIOR FEEDBACK TO ADDRESS (attempt ${opts.attempt ?? 2}):\n${opts.feedback.map((f, i) => `  ${i + 1}. ${f}`).join('\n')}\n`
@@ -44,5 +49,5 @@ Execute the subtask now.`;
     abortSignal: opts.abortSignal,
   });
 
-  return result.finalText;
+  return { summary: result.finalText, toolCount: result.toolCount };
 }

@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import clsx from 'clsx';
 import { api } from '../api';
 import type { Idea } from '../types';
 
@@ -9,23 +11,24 @@ interface Props {
 export function IdeasColumn({ projectId }: Props) {
   const qc = useQueryClient();
 
+  // No polling: WS handler invalidates these queries on every `ideas_updated`
+  // broadcast (scout start, finish, error, idea created/approved/rejected).
   const ideasQ = useQuery<Idea[]>({
     queryKey: ['ideas', projectId],
     queryFn: () => api.listIdeas(projectId),
-    refetchInterval: 10_000,
   });
   const statusQ = useQuery({
     queryKey: ['scoutStatus', projectId],
     queryFn: () => api.getScoutStatus(projectId),
-    refetchInterval: 5_000,
   });
   const ideas = ideasQ.data ?? [];
-  const scouting = statusQ.data?.scouting ?? false;
-
+  // Show busy state instantly on click — don't wait for the 5s status poll or
+  // the WS round-trip to register the new scouting flag.
   const scoutMut = useMutation({
     mutationFn: () => api.scoutIdeas(projectId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['scoutStatus', projectId] }),
   });
+  const scouting = (statusQ.data?.scouting ?? false) || scoutMut.isPending;
   const approveMut = useMutation({
     mutationFn: (id: string) => api.approveIdea(id),
     onSuccess: () => {
@@ -58,9 +61,14 @@ export function IdeasColumn({ projectId }: Props) {
         </button>
       </div>
       <div className="flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
-        {scouting && ideas.length === 0 && (
-          <div className="animate-pulse rounded-md border border-violet-800/60 bg-violet-950/30 px-3 py-2 text-[11px] text-violet-300">
-            🔎 Scouting your project for fresh ideas…
+        {scouting && (
+          <div className="flex items-center gap-2 rounded-md border border-violet-800/60 bg-violet-950/40 px-3 py-2 text-[11px] text-violet-200">
+            <span className="flex gap-0.5">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400" />
+            </span>
+            <span>Scouting your project for fresh ideas… (~30–60s)</span>
           </div>
         )}
         {!scouting && ideas.length === 0 && (
@@ -72,41 +80,86 @@ export function IdeasColumn({ projectId }: Props) {
           </div>
         )}
         {ideas.map((idea) => (
-          <div
+          <IdeaCard
             key={idea.id}
-            className="rounded-lg border border-violet-900/40 bg-neutral-900/80 p-2.5 shadow-sm transition hover:border-violet-800"
-          >
-            <div className="text-sm font-medium text-neutral-50">{idea.title}</div>
-            <div className="mt-1 line-clamp-3 text-xs leading-relaxed text-neutral-400">
-              {idea.description}
-            </div>
-            {idea.rationale && (
-              <div className="mt-1.5 line-clamp-2 border-l-2 border-violet-800/60 pl-2 text-[11px] italic text-neutral-500">
-                {idea.rationale}
-              </div>
-            )}
-            <div className="mt-2 flex gap-1.5">
-              <button
-                className="btn btn-success flex-1"
-                onClick={() => approveMut.mutate(idea.id)}
-                disabled={approveMut.isPending}
-                title="Approve — creates a Backlog task"
-              >
-                {approveMut.isPending && approveMut.variables === idea.id
-                  ? 'Approving…'
-                  : '✓ Approve'}
-              </button>
-              <button
-                className="btn btn-ghost flex-1"
-                onClick={() => rejectMut.mutate(idea.id)}
-                disabled={rejectMut.isPending}
-                title="Reject — the scout won't suggest this again"
-              >
-                ✗ Reject
-              </button>
-            </div>
-          </div>
+            idea={idea}
+            onApprove={() => approveMut.mutate(idea.id)}
+            onReject={() => rejectMut.mutate(idea.id)}
+            approving={approveMut.isPending && approveMut.variables === idea.id}
+            rejecting={rejectMut.isPending && rejectMut.variables === idea.id}
+          />
         ))}
+      </div>
+    </div>
+  );
+}
+
+function IdeaCard({
+  idea,
+  onApprove,
+  onReject,
+  approving,
+  rejecting,
+}: {
+  idea: Idea;
+  onApprove: () => void;
+  onReject: () => void;
+  approving: boolean;
+  rejecting: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  // Heuristic: any time text would clearly clamp, show the toggle. Cheap to
+  // always show — clicking when already short is a no-op visually.
+  const longish =
+    (idea.description?.length ?? 0) > 140 || (idea.rationale?.length ?? 0) > 100;
+
+  return (
+    <div className="rounded-lg border border-violet-900/40 bg-neutral-900/80 p-2.5 shadow-sm transition hover:border-violet-800">
+      <div className="text-sm font-medium text-neutral-50">{idea.title}</div>
+      <div
+        className={clsx(
+          'mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-neutral-400',
+          !expanded && 'line-clamp-3'
+        )}
+      >
+        {idea.description}
+      </div>
+      {idea.rationale && (
+        <div
+          className={clsx(
+            'mt-1.5 whitespace-pre-wrap break-words border-l-2 border-violet-800/60 pl-2 text-[11px] italic text-neutral-500',
+            !expanded && 'line-clamp-2'
+          )}
+        >
+          {idea.rationale}
+        </div>
+      )}
+      {longish && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1.5 text-[11px] font-medium text-violet-400 hover:text-violet-300"
+        >
+          {expanded ? '▴ Show less' : '▾ Show more'}
+        </button>
+      )}
+      <div className="mt-2 flex gap-1.5">
+        <button
+          className="btn btn-success flex-1"
+          onClick={onApprove}
+          disabled={approving}
+          title="Approve — creates a Backlog task"
+        >
+          {approving ? 'Approving…' : '✓ Approve'}
+        </button>
+        <button
+          className="btn btn-ghost flex-1"
+          onClick={onReject}
+          disabled={rejecting}
+          title="Reject — the scout won't suggest this again"
+        >
+          {rejecting ? '…' : '✗ Reject'}
+        </button>
       </div>
     </div>
   );

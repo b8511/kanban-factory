@@ -76,6 +76,19 @@ projectsRouter.delete('/:id', (req, res) => {
   res.status(204).end();
 });
 
+projectsRouter.patch('/:id/rigor', (req, res) => {
+  const project = store.getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'not found' });
+  const rigor = req.body?.rigor;
+  if (rigor !== 'lenient' && rigor !== 'normal' && rigor !== 'strict') {
+    return res.status(400).json({ error: "rigor must be 'lenient' | 'normal' | 'strict'" });
+  }
+  store.setProjectRigor(project.id, rigor);
+  const updated = store.getProject(project.id);
+  broadcast({ type: 'project_updated', projectId: project.id, payload: updated });
+  res.json(updated);
+});
+
 projectsRouter.patch('/:id/run-command', (req, res) => {
   const project = store.getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'not found' });

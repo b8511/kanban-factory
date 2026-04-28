@@ -1,7 +1,16 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUi } from '../store';
-import type { AppRunStatus, ReviewSeverity, SubtaskProgress, WsEvent, AgentRole } from '../types';
+import type {
+  AppRunStatus,
+  OperatorAnalysis,
+  OperatorMessage,
+  OperatorSessionStatus,
+  ReviewSeverity,
+  SubtaskProgress,
+  WsEvent,
+  AgentRole,
+} from '../types';
 
 export function useWebSocket(onLog?: (event: WsEvent) => void): void {
   const qc = useQueryClient();
@@ -12,6 +21,9 @@ export function useWebSocket(onLog?: (event: WsEvent) => void): void {
   const appendRunLog = useUi((s) => s.appendRunLog);
   const resetRunLogs = useUi((s) => s.resetRunLogs);
   const setRunExit = useUi((s) => s.setRunExit);
+  const patchOperator = useUi((s) => s.patchOperator);
+  const appendOperatorMessage = useUi((s) => s.appendOperatorMessage);
+  const appendOperatorTerminalLine = useUi((s) => s.appendOperatorTerminalLine);
 
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -41,6 +53,19 @@ export function useWebSocket(onLog?: (event: WsEvent) => void): void {
           return;
         }
         if (event.type === 'task_updated' && event.projectId) {
+          qc.invalidateQueries({ queryKey: ['tasks', event.projectId] });
+          if (event.taskId) qc.invalidateQueries({ queryKey: ['taskDetail', event.taskId] });
+        }
+        if (
+          (event.type === 'subtask_progress' ||
+            event.type === 'message' ||
+            event.type === 'escalation_raised' ||
+            event.type === 'escalation_resolved') &&
+          event.taskId
+        ) {
+          qc.invalidateQueries({ queryKey: ['taskDetail', event.taskId] });
+        }
+        if (event.type === 'escalation_raised' && event.projectId) {
           qc.invalidateQueries({ queryKey: ['tasks', event.projectId] });
         }
         if (event.type === 'project_updated') {
@@ -120,6 +145,49 @@ export function useWebSocket(onLog?: (event: WsEvent) => void): void {
             });
           }
         }
+        if (event.type === 'operator_analysis' && event.projectId) {
+          const p = event.payload as { analysis?: OperatorAnalysis; status?: OperatorSessionStatus } | undefined;
+          if (p?.analysis !== undefined) {
+            patchOperator(event.projectId, {
+              analysis: p.analysis,
+              status: p.status ?? 'idle',
+            });
+          }
+        }
+        if (event.type === 'operator_message' && event.projectId) {
+          const p = event.payload as OperatorMessage | undefined;
+          if (p && p.id) appendOperatorMessage(event.projectId, p);
+        }
+        if (event.type === 'operator_status' && event.projectId) {
+          const p = event.payload as
+            | { status?: OperatorSessionStatus; running?: boolean; command?: string | null; pid?: number | null; code?: number | null; signal?: string | null; line?: { stream?: 'stdout' | 'stderr'; line?: string } }
+            | undefined;
+          if (p) {
+            const patch: Record<string, unknown> = {};
+            if (p.status !== undefined) patch.status = p.status;
+            if (p.running !== undefined) patch.running = p.running;
+            if (p.command !== undefined) patch.command = p.command;
+            if (p.pid !== undefined) patch.pid = p.pid;
+            if (p.code !== undefined || p.signal !== undefined) {
+              patch.exit = {
+                code: p.code ?? null,
+                signal: p.signal ?? null,
+                finishedAt: event.at ?? new Date().toISOString(),
+              };
+            }
+            if (p.line && typeof p.line.line === 'string') {
+              appendOperatorTerminalLine(event.projectId, {
+                stream: p.line.stream ?? 'stdout',
+                line: p.line.line,
+                at: event.at ?? new Date().toISOString(),
+              });
+            }
+            if (Object.keys(patch).length > 0) patchOperator(event.projectId, patch);
+          }
+        }
+        if (event.type === 'operator_diagnostic_sent' && event.projectId) {
+          qc.invalidateQueries({ queryKey: ['tasks', event.projectId] });
+        }
         if (
           event.type === 'log' ||
           event.type === 'message' ||
@@ -131,7 +199,9 @@ export function useWebSocket(onLog?: (event: WsEvent) => void): void {
           event.type === 'subtask_progress' ||
           event.type === 'app_run_started' ||
           event.type === 'app_run_log' ||
-          event.type === 'app_run_stopped'
+          event.type === 'app_run_stopped' ||
+          event.type === 'escalation_raised' ||
+          event.type === 'escalation_resolved'
         ) {
           onLog?.(event);
         }
@@ -156,5 +226,18 @@ export function useWebSocket(onLog?: (event: WsEvent) => void): void {
       ws?.close();
       document.removeEventListener('visibilitychange', visibilityHandler);
     };
-  }, [qc, onLog, recordToolUse, recordCost, recordSubtaskProgress, setAppRun, appendRunLog, resetRunLogs, setRunExit]);
+  }, [
+    qc,
+    onLog,
+    recordToolUse,
+    recordCost,
+    recordSubtaskProgress,
+    setAppRun,
+    appendRunLog,
+    resetRunLogs,
+    setRunExit,
+    patchOperator,
+    appendOperatorMessage,
+    appendOperatorTerminalLine,
+  ]);
 }

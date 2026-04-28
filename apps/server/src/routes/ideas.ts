@@ -49,6 +49,7 @@ export async function scoutProject(projectId: string, reason: string): Promise<n
     return created;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    console.error(`[scout] failed for ${projectId}:`, err);
     broadcast({ type: 'ideas_updated', projectId, payload: { scouting: false, error: message, reason } });
     return 0;
   } finally {

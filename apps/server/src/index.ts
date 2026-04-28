@@ -6,6 +6,7 @@ import { projectsRouter } from './routes/projects.js';
 import { tasksRouter } from './routes/tasks.js';
 import { runRouter } from './routes/run.js';
 import { ideasRouter } from './routes/ideas.js';
+import { operatorRouter } from './routes/operator.js';
 import { attachWebSocket } from './ws.js';
 
 const PORT = Number(process.env.PORT ?? 4000);
@@ -19,6 +20,7 @@ app.use('/api/projects', projectsRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/ideas', ideasRouter);
 app.use('/api', runRouter);
+app.use('/api', operatorRouter);
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error('[server] unhandled', err);

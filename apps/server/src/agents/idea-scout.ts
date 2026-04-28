@@ -74,6 +74,9 @@ Explore the project, then output the JSON with 1-3 fresh ideas (or empty if trul
     prompt: userPrompt,
     maxTurns: 15,
     abortSignal,
+    // Scout isn't tied to a real task row; skip DB recording to avoid the
+    // agent_runs.task_id FK constraint violation.
+    skipDbRecording: true,
   });
 
   return parseIdeas(result.finalText);
